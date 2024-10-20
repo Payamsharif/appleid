@@ -1,0 +1,851 @@
+import sys
+import os
+import json
+import hashlib
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QAction, QTableWidget, QTableWidgetItem, 
+    QVBoxLayout, QWidget, QPushButton, QLineEdit, QFormLayout, QDialog, 
+    QHBoxLayout, QMessageBox, QLabel, QHeaderView
+)
+from PyQt5.QtCore import Qt, QTimer  # اصلاح ایمپورت QTimer از QtCore
+from PyQt5.QtGui import QFont, QFontDatabase, QIcon
+from PyQt5.QtPrintSupport import QPrinter, QPrintDialog
+from PyQt5.QtGui import QTextDocument
+import pandas as pd
+from datetime import datetime
+
+# نام فایل اکسل
+file_name = "customer_data.xlsx"
+
+# نام فایل اعتبارسنجی
+credentials_file = "credentials.json"
+
+def hash_password(password):
+    """
+    هش کردن رمز عبور با استفاده از الگوریتم SHA-256.
+    """
+    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+def create_action(icon_path, text, parent=None):
+    """
+    ایجاد یک QAction با آیکون اگر وجود دارد، در غیر این صورت فقط با متن.
+    """
+    if os.path.exists(icon_path):
+        return QAction(QIcon(icon_path), text, parent)
+    else:
+        return QAction(text, parent)
+
+def load_credentials():
+    """
+    بارگذاری اطلاعات ورود از فایل credentials.json.
+    اگر فایل وجود نداشته باشد، آن را با اطلاعات پیش‌فرض ایجاد می‌کند.
+    """
+    if not os.path.exists(credentials_file):
+        # اطلاعات پیش‌فرض
+        default_credentials = {
+            "username": "admin",
+            "password_hash": hash_password("password123")
+        }
+        with open(credentials_file, 'w') as f:
+            json.dump(default_credentials, f, ensure_ascii=False, indent=4)
+        return default_credentials
+    else:
+        with open(credentials_file, 'r') as f:
+            return json.load(f)
+
+def save_credentials(credentials):
+    """
+    ذخیره اطلاعات ورود به فایل credentials.json.
+    """
+    with open(credentials_file, 'w') as f:
+        json.dump(credentials, f, ensure_ascii=False, indent=4)
+
+class LoginDialog(QDialog):
+    """
+    دیالوگ ورود برای برنامه.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ورود به سیستم")
+        self.setFixedSize(300, 180)
+
+        # تنظیم فونت
+        font = QFont("Vazir", 10)
+        self.setFont(font)
+
+        layout = QVBoxLayout()
+
+        form_layout = QFormLayout()
+        self.username_input = QLineEdit()
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.Password)
+        form_layout.addRow(QLabel("<b>نام کاربری:</b>"), self.username_input)
+        form_layout.addRow(QLabel("<b>رمز عبور:</b>"), self.password_input)
+
+        layout.addLayout(form_layout)
+
+        button_layout = QHBoxLayout()
+        self.login_button = QPushButton("ورود")
+        self.login_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 5px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        self.login_button.clicked.connect(self.handle_login)
+
+        self.cancel_button = QPushButton("لغو")
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 5px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+        """)
+        self.cancel_button.clicked.connect(self.reject)
+
+        button_layout.addStretch()
+        button_layout.addWidget(self.login_button)
+        button_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def handle_login(self):
+        """
+        اعتبارسنجی اطلاعات ورود.
+        """
+        username = self.username_input.text().strip()
+        password = self.password_input.text().strip()
+
+        credentials = load_credentials()
+        valid_username = credentials.get("username")
+        valid_password_hash = credentials.get("password_hash")
+
+        if username == valid_username and hash_password(password) == valid_password_hash:
+            self.accept()
+        else:
+            QMessageBox.warning(self, "خطا", "نام کاربری یا رمز عبور نادرست است.")
+
+class ChangePasswordDialog(QDialog):
+    """
+    دیالوگ برای تغییر نام کاربری و رمز عبور.
+    """
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("تغییر نام کاربری و رمز عبور")
+        self.setFixedSize(350, 250)
+
+        # تنظیم فونت
+        font = QFont("Vazir", 10)
+        self.setFont(font)
+
+        layout = QVBoxLayout()
+
+        form_layout = QFormLayout()
+        self.current_password_input = QLineEdit()
+        self.current_password_input.setEchoMode(QLineEdit.Password)
+        self.new_username_input = QLineEdit()
+        self.new_password_input = QLineEdit()
+        self.new_password_input.setEchoMode(QLineEdit.Password)
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setEchoMode(QLineEdit.Password)
+
+        form_layout.addRow(QLabel("<b>رمز عبور فعلی:</b>"), self.current_password_input)
+        form_layout.addRow(QLabel("<b>نام کاربری جدید:</b>"), self.new_username_input)
+        form_layout.addRow(QLabel("<b>رمز عبور جدید:</b>"), self.new_password_input)
+        form_layout.addRow(QLabel("<b>تایید رمز عبور جدید:</b>"), self.confirm_password_input)
+
+        layout.addLayout(form_layout)
+
+        button_layout = QHBoxLayout()
+        self.change_button = QPushButton("تغییر")
+        self.change_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 5px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        self.change_button.clicked.connect(self.handle_change)
+
+        self.cancel_button = QPushButton("لغو")
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 5px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+        """)
+        self.cancel_button.clicked.connect(self.reject)
+
+        button_layout.addStretch()
+        button_layout.addWidget(self.change_button)
+        button_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def handle_change(self):
+        """
+        پردازش تغییرات نام کاربری و رمز عبور.
+        """
+        current_password = self.current_password_input.text().strip()
+        new_username = self.new_username_input.text().strip()
+        new_password = self.new_password_input.text().strip()
+        confirm_password = self.confirm_password_input.text().strip()
+
+        credentials = load_credentials()
+        valid_password_hash = credentials.get("password_hash")
+
+        if not current_password or not new_username or not new_password or not confirm_password:
+            QMessageBox.warning(self, "هشدار", "لطفاً تمامی فیلدها را پر کنید.")
+            return
+
+        if hash_password(current_password) != valid_password_hash:
+            QMessageBox.warning(self, "خطا", "رمز عبور فعلی نادرست است.")
+            return
+
+        if new_password != confirm_password:
+            QMessageBox.warning(self, "خطا", "رمز عبور جدید و تایید رمز عبور مطابقت ندارند.")
+            return
+
+        # به‌روزرسانی اطلاعات ورود
+        new_credentials = {
+            "username": new_username,
+            "password_hash": hash_password(new_password)
+        }
+        save_credentials(new_credentials)
+        QMessageBox.information(self, "موفقیت", "نام کاربری و رمز عبور با موفقیت تغییر یافت.")
+        self.accept()
+
+class CustomerDialog(QDialog):
+    """
+    دیالوگ برای افزودن یا ویرایش مشتری.
+    """
+    def __init__(self, parent=None, customer_data=None):
+        super().__init__(parent)
+        self.setWindowTitle("افزودن/ویرایش مشتری")
+        self.setFixedSize(400, 600)
+        
+        # مسیر آیکون‌ها را مطابق با ساختار پروژه تنظیم کنید
+        icon_path = os.path.join(os.path.dirname(__file__), "icons", "customer.png")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+
+        # تنظیم فونت پیش‌فرض
+        font = QFont("Vazir", 10)  # استفاده از فونت Vazir با اندازه کوچک‌تر
+        self.setFont(font)
+
+        self.layout = QVBoxLayout()
+
+        form_layout = QFormLayout()
+
+        self.first_name_input = QLineEdit()
+        self.last_name_input = QLineEdit()
+        self.phone_input = QLineEdit()
+        self.apple_id_date_input = QLineEdit()
+        self.apple_id_username_input = QLineEdit()
+        self.apple_id_password_input = QLineEdit()
+        self.security_q1_input = QLineEdit()
+        self.security_q2_input = QLineEdit()
+        self.security_q3_input = QLineEdit()
+        self.birthdate_input = QLineEdit()
+
+        if customer_data:
+            self.first_name_input.setText(customer_data.get('نام'))
+            self.last_name_input.setText(customer_data.get('نام خانوادگی'))
+            self.phone_input.setText(customer_data.get('شماره تماس'))
+            self.apple_id_date_input.setText(customer_data.get('تاریخ ایجاد اپل آیدی (شمسی)'))
+            self.apple_id_username_input.setText(customer_data.get('نام کاربری اپل آیدی'))
+            self.apple_id_password_input.setText(customer_data.get('رمز عبور اپل آیدی'))
+            self.security_q1_input.setText(customer_data.get('سوال امنیتی اول'))
+            self.security_q2_input.setText(customer_data.get('سوال امنیتی دوم'))
+            self.security_q3_input.setText(customer_data.get('سوال امنیتی سوم'))
+            self.birthdate_input.setText(customer_data.get('تاریخ تولد (میلادی)'))
+
+        # اضافه کردن ویجت‌ها به فرم
+        form_layout.addRow(QLabel("<b>نام:</b>"), self.first_name_input)
+        form_layout.addRow(QLabel("<b>نام خانوادگی:</b>"), self.last_name_input)
+        form_layout.addRow(QLabel("<b>شماره تماس:</b>"), self.phone_input)
+        form_layout.addRow(QLabel("<b>تاریخ ایجاد اپل آیدی:</b>"), self.apple_id_date_input)
+        form_layout.addRow(QLabel("<b>نام کاربری اپل آیدی:</b>"), self.apple_id_username_input)
+        form_layout.addRow(QLabel("<b>رمز عبور اپل آیدی:</b>"), self.apple_id_password_input)
+        form_layout.addRow(QLabel("<b>سوال امنیتی اول:</b>"), self.security_q1_input)
+        form_layout.addRow(QLabel("<b>سوال امنیتی دوم:</b>"), self.security_q2_input)
+        form_layout.addRow(QLabel("<b>سوال امنیتی سوم:</b>"), self.security_q3_input)
+        form_layout.addRow(QLabel("<b>تاریخ تولد (میلادی):</b>"), self.birthdate_input)
+
+        self.layout.addLayout(form_layout)
+
+        # ایجاد دکمه‌ها با استفاده از تابع create_action
+        submit_icon_path = os.path.join(os.path.dirname(__file__), "icons", "save.png")
+        self.submit_button = QPushButton("ثبت")
+        if os.path.exists(submit_icon_path):
+            self.submit_button.setIcon(QIcon(submit_icon_path))
+        self.submit_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                padding: 10px;
+                border: none;
+                border-radius: 5px;
+                font-size: 12pt;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        self.submit_button.clicked.connect(self.accept)
+
+        cancel_icon_path = os.path.join(os.path.dirname(__file__), "icons", "cancel.png")
+        self.cancel_button = QPushButton("لغو")
+        if os.path.exists(cancel_icon_path):
+            self.cancel_button.setIcon(QIcon(cancel_icon_path))
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                padding: 10px;
+                border: none;
+                border-radius: 5px;
+                font-size: 12pt;
+            }
+            QPushButton:hover {
+                background-color: #da190b;
+            }
+        """)
+        self.cancel_button.clicked.connect(self.reject)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.submit_button)
+        button_layout.addWidget(self.cancel_button)
+
+        self.layout.addLayout(button_layout)
+
+        self.setLayout(self.layout)
+
+    def get_customer_data(self):
+        """
+        دریافت داده‌های وارد شده توسط کاربر.
+        """
+        return {
+            'نام': self.first_name_input.text(),
+            'نام خانوادگی': self.last_name_input.text(),
+            'شماره تماس': self.phone_input.text(),
+            'تاریخ ایجاد اپل آیدی (شمسی)': self.apple_id_date_input.text(),
+            'نام کاربری اپل آیدی': self.apple_id_username_input.text(),
+            'رمز عبور اپل آیدی': self.apple_id_password_input.text(),
+            'سوال امنیتی اول': self.security_q1_input.text(),
+            'سوال امنیتی دوم': self.security_q2_input.text(),
+            'سوال امنیتی سوم': self.security_q3_input.text(),
+            'تاریخ تولد (میلادی)': self.birthdate_input.text(),
+        }
+
+class CustomerManagementApp(QMainWindow):
+    """
+    پنجره اصلی برنامه مدیریت مشتریان.
+    """
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("سیستم مدیریت مشتریان")
+        self.setFixedSize(1200, 800)
+        
+        # بارگذاری فونت Vazir
+        font_id = QFontDatabase.addApplicationFont(os.path.join(os.path.dirname(__file__), "fonts", "Vazir-Regular.ttf"))
+        if font_id != -1:
+            font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+            self.setFont(QFont(font_family, 10))
+        else:
+            self.setFont(QFont("Tahoma", 10))  # پیش‌فرض اگر فونت Vazir بارگذاری نشد
+
+        # مسیر آیکون برنامه را تنظیم کنید
+        app_icon_path = os.path.join(os.path.dirname(__file__), "icons", "app_icon.png")
+        if os.path.exists(app_icon_path):
+            self.setWindowIcon(QIcon(app_icon_path))
+
+        # تنظیم استایل کلی برنامه
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f9f9f9;
+            }
+            QTableWidget {
+                background-color: white;
+                gridline-color: #dcdcdc;
+                font-size: 10pt;
+            }
+            QHeaderView::section {
+                background-color: #4CAF50;
+                color: white;
+                padding: 4px;
+                border: 1px solid #6c6c6c;
+                font-size: 10pt;
+            }
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                padding: 8px 16px;
+                border: none;
+                border-radius: 5px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton#delete_button {
+                background-color: #f44336;
+            }
+            QPushButton#delete_button:hover {
+                background-color: #da190b;
+            }
+            QPushButton#print_button {
+                background-color: #2196F3;
+            }
+            QPushButton#print_button:hover {
+                background-color: #1976D2;
+            }
+            QLineEdit {
+                padding: 6px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                font-size: 10pt;
+            }
+            QMenuBar {
+                background-color: #4CAF50;
+            }
+            QMenuBar::item {
+                color: white;
+                padding: 6px 12px;
+                font-size: 10pt;
+            }
+            QMenuBar::item:selected {
+                background-color: #45a049;
+            }
+            QMenu {
+                background-color: white;
+                border: 1px solid #dcdcdc;
+            }
+            QMenu::item:selected {
+                background-color: #f0f0f0;
+            }
+        """)
+
+        # ایجاد منوی فایل
+        self.menu = self.menuBar().addMenu("فایل")
+
+        # مسیر آیکون افزودن مشتری را تنظیم کنید
+        add_icon_path = os.path.join(os.path.dirname(__file__), "icons", "add.png")
+        add_customer_action = create_action(add_icon_path, "افزودن مشتری", self)
+        add_customer_action.triggered.connect(self.open_add_customer_dialog)
+        self.menu.addAction(add_customer_action)
+
+        # مسیر آیکون تغییر نام کاربری و رمز عبور را تنظیم کنید
+        change_credentials_icon_path = os.path.join(os.path.dirname(__file__), "icons", "change_credentials.png")
+        change_credentials_action = create_action(change_credentials_icon_path, "تغییر نام کاربری و رمز عبور", self)
+        change_credentials_action.triggered.connect(self.open_change_credentials_dialog)
+        self.menu.addAction(change_credentials_action)
+
+        # مسیر آیکون خروج را تنظیم کنید
+        exit_icon_path = os.path.join(os.path.dirname(__file__), "icons", "exit.png")
+        exit_action = create_action(exit_icon_path, "خروج", self)
+        exit_action.triggered.connect(self.close)
+        self.menu.addAction(exit_action)
+
+        # بارگذاری داده‌ها
+        self.df = self.load_data()
+
+        # تنظیم جدول نمایش داده‌ها
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(self.df.columns))
+        self.table.setHorizontalHeaderLabels(self.df.columns)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSortingEnabled(True)
+
+        self.load_table_data()
+
+        central_widget = QWidget()
+        layout = QVBoxLayout()
+
+        # تنظیمات بخش جستجو و دکمه‌ها
+        search_layout = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("جستجوی مشتری بر اساس نام یا شماره تماس")
+        self.search_input.setFixedWidth(300)
+        
+        # مسیر آیکون جستجو را تنظیم کنید
+        search_icon_path = os.path.join(os.path.dirname(__file__), "icons", "search.png")
+        self.search_button = QPushButton("جستجو")
+        if os.path.exists(search_icon_path):
+            self.search_button.setIcon(QIcon(search_icon_path))
+        self.search_button.clicked.connect(self.search_customer)
+
+        # ایجاد دکمه افزودن مشتری در صفحه اصلی
+        add_button_icon_path = os.path.join(os.path.dirname(__file__), "icons", "add.png")
+        self.add_button = QPushButton("افزودن مشتری")
+        if os.path.exists(add_button_icon_path):
+            self.add_button.setIcon(QIcon(add_button_icon_path))
+        self.add_button.clicked.connect(self.open_add_customer_dialog)
+
+        # مسیر آیکون ویرایش را تنظیم کنید
+        edit_icon_path = os.path.join(os.path.dirname(__file__), "icons", "edit.png")
+        self.edit_button = QPushButton("ویرایش")
+        if os.path.exists(edit_icon_path):
+            self.edit_button.setIcon(QIcon(edit_icon_path))
+        self.edit_button.clicked.connect(self.edit_customer)
+
+        # مسیر آیکون حذف را تنظیم کنید
+        delete_icon_path = os.path.join(os.path.dirname(__file__), "icons", "delete.png")
+        self.delete_button = QPushButton("حذف")
+        if os.path.exists(delete_icon_path):
+            self.delete_button.setIcon(QIcon(delete_icon_path))
+        self.delete_button.setObjectName("delete_button")
+        self.delete_button.clicked.connect(self.delete_customer)
+
+        # مسیر آیکون چاپ را تنظیم کنید
+        print_icon_path = os.path.join(os.path.dirname(__file__), "icons", "print.png")
+        self.print_button = QPushButton("چاپ")
+        if os.path.exists(print_icon_path):
+            self.print_button.setIcon(QIcon(print_icon_path))
+        self.print_button.setObjectName("print_button")
+        self.print_button.clicked.connect(self.print_customer)
+
+        # اضافه کردن ویجت‌ها به لایه جستجو
+        search_layout.addWidget(QLabel("جستجو:"))
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_button)
+        search_layout.addStretch()
+        search_layout.addWidget(self.add_button)  # افزودن دکمه "افزودن مشتری" در کنار "ویرایش"
+        search_layout.addWidget(self.edit_button)
+        search_layout.addWidget(self.delete_button)
+        search_layout.addWidget(self.print_button)
+
+        layout.addLayout(search_layout)
+        layout.addWidget(self.table)
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+    def load_data(self):
+        """
+        بارگذاری داده‌ها از فایل اکسل. اگر فایل وجود نداشته باشد، یک DataFrame خالی ایجاد می‌کند.
+        """
+        try:
+            df = pd.read_excel(file_name)
+        except FileNotFoundError:
+            df = pd.DataFrame(columns=[
+                'نام', 'نام خانوادگی', 'شماره تماس', 'تاریخ ایجاد اپل آیدی (شمسی)',
+                'نام کاربری اپل آیدی', 'رمز عبور اپل آیدی', 
+                'سوال امنیتی اول', 'سوال امنیتی دوم', 'سوال امنیتی سوم', 
+                'تاریخ تولد (میلادی)'
+            ])
+        return df
+
+    def save_to_excel(self):
+        """
+        ذخیره داده‌ها به فایل اکسل.
+        """
+        try:
+            with pd.ExcelWriter(file_name, engine='openpyxl') as writer:
+                self.df.to_excel(writer, index=False)
+        except Exception as e:
+            QMessageBox.critical(self, "خطا", f"در ذخیره‌سازی داده‌ها خطایی رخ داد: {e}")
+
+    def load_table_data(self):
+        """
+        بارگذاری داده‌ها به جدول.
+        """
+        self.table.setRowCount(len(self.df))
+        for i, row in self.df.iterrows():
+            for j, value in enumerate(row):
+                item = QTableWidgetItem(str(value))
+                item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(i, j, item)
+
+    def open_add_customer_dialog(self):
+        """
+        باز کردن دیالوگ افزودن مشتری جدید.
+        """
+        dialog = CustomerDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            new_data = dialog.get_customer_data()
+            if not new_data['نام'] or not new_data['شماره تماس']:
+                QMessageBox.warning(self, "هشدار", "لطفاً نام و شماره تماس را وارد کنید.")
+                return
+            new_data_df = pd.DataFrame([new_data])
+            self.df = pd.concat([self.df, new_data_df], ignore_index=True)
+            self.load_table_data()
+            self.save_to_excel()
+            QMessageBox.information(self, "موفقیت", "مشتری جدید اضافه شد.")
+
+    def search_customer(self):
+        """
+        جستجوی مشتری بر اساس نام یا شماره تماس.
+        """
+        search_text = self.search_input.text().strip().lower()
+        if search_text:
+            filtered_df = self.df[
+                self.df['نام'].astype(str).str.lower().str.contains(search_text, na=False) |
+                self.df['شماره تماس'].astype(str).str.lower().str.contains(search_text, na=False)
+            ]
+            if filtered_df.empty:
+                QMessageBox.information(self, "نتیجه جستجو", "مشتری‌ای با این مشخصات پیدا نشد.")
+                return
+            self.table.setRowCount(len(filtered_df))
+            for i, (_, row) in enumerate(filtered_df.iterrows()):
+                for j, value in enumerate(row):
+                    item = QTableWidgetItem(str(value))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    self.table.setItem(i, j, item)
+        else:
+            self.load_table_data()
+
+    def edit_customer(self):
+        """
+        ویرایش مشتری انتخاب شده.
+        """
+        selected_row = self.table.currentRow()
+        if selected_row >= 0:
+            customer_data = {col: self.table.item(selected_row, i).text() for i, col in enumerate(self.df.columns)}
+            dialog = CustomerDialog(self, customer_data)
+            if dialog.exec_() == QDialog.Accepted:
+                updated_data = dialog.get_customer_data()
+                if not updated_data['نام'] or not updated_data['شماره تماس']:
+                    QMessageBox.warning(self, "هشدار", "لطفاً نام و شماره تماس را وارد کنید.")
+                    return
+                for i, (col, value) in enumerate(updated_data.items()):
+                    self.table.setItem(selected_row, i, QTableWidgetItem(str(value)))
+                self.df.iloc[selected_row] = list(updated_data.values())
+                self.save_to_excel()
+                QMessageBox.information(self, "موفقیت", "مشتری ویرایش شد.")
+        else:
+            QMessageBox.warning(self, "هشدار", "لطفاً یک ردیف را برای ویرایش انتخاب کنید.")
+
+    def delete_customer(self):
+        """
+        حذف مشتری انتخاب شده.
+        """
+        selected_row = self.table.currentRow()
+        if selected_row >= 0:
+            reply = QMessageBox.question(
+                self, 'تأیید حذف', 
+                "آیا مطمئن هستید که می‌خواهید این مشتری را حذف کنید؟",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self.table.removeRow(selected_row)
+                self.df = self.df.drop(self.df.index[selected_row]).reset_index(drop=True)
+                self.save_to_excel()
+                QMessageBox.information(self, "موفقیت", "مشتری حذف شد.")
+        else:
+            QMessageBox.warning(self, "هشدار", "لطفاً یک ردیف را برای حذف انتخاب کنید.")
+
+    def print_customer(self):
+        """
+        چاپ سند مشتری انتخاب شده با کیفیت بالا و اندازه A5 Landscape.
+        """
+        selected_row = self.table.currentRow()
+        if selected_row < 0:
+            QMessageBox.warning(self, "هشدار", "لطفاً یک ردیف را برای چاپ انتخاب کنید.")
+            return
+
+        # دریافت داده‌های مشتری انتخابی
+        customer_data = {col: self.table.item(selected_row, i).text() for i, col in enumerate(self.df.columns)}
+
+        # تولید شماره سند (می‌توانید این را به هر روشی که می‌خواهید تنظیم کنید)
+        document_number = len(self.df) + 1  # به عنوان مثال، کل تعداد ردیف‌ها + 1
+
+        # دریافت تاریخ فعلی
+        print_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # ساختار سند چاپی با افزودن عنوان و اطلاعات پایین
+        doc_content = f"""
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                @page {{
+                    size: A5 landscape;
+                    margin: 10mm;
+                }}
+                body {{
+                    font-family: 'Vazir', sans-serif;
+                    font-size: 10pt;
+                    direction: rtl;
+                    text-align: right;
+                }}
+                .header {{
+                    text-align: center;
+                    font-size: 16pt;
+                    font-weight: bold;
+                    margin-bottom: 5px;
+                }}
+                .sub-header {{
+                    text-align: center;
+                    font-size: 12pt;
+                    margin-top: 5px;
+                    margin-bottom: 10px;
+                }}
+                .info {{
+                    font-size: 8pt;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin-top: 10px;
+                }}
+                th, td {{
+                    border: 1px solid #000;
+                    padding: 4px;
+                    font-size: 8pt;
+                }}
+                th {{
+                    background-color: #4CAF50;
+                    color: white;
+                }}
+                .footer {{
+                    margin-top: 10px;
+                    font-size: 8pt;
+                    text-align: center;
+                }}
+                /* جلوگیری از تقسیم کل جدول به دو صفحه */
+                table {{
+                    page-break-inside: avoid;
+                }}
+                tr {{
+                    page-break-inside: avoid;
+                    page-break-after: auto;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">موبایل مایکروتل</div>
+            <div class="sub-header">گزارش مشتری</div>
+            <div class="info">
+                <p><b>شماره سند:</b> {document_number}</p>
+                <p><b>تاریخ چاپ:</b> {print_date}</p>
+            </div>
+            <table>
+                <tr>
+                    <th>نام</th>
+                    <th>نام خانوادگی</th>
+                    <th>شماره تماس</th>
+                    <th>تاریخ ایجاد اپل آیدی (شمسی)</th>
+                    <th>نام کاربری اپل آیدی</th>
+                    <th>رمز عبور اپل آیدی</th>
+                    <th>سوال امنیتی اول</th>
+                    <th>سوال امنیتی دوم</th>
+                    <th>سوال امنیتی سوم</th>
+                    <th>تاریخ تولد (میلادی)</th>
+                </tr>
+                <tr>
+                    <td>{customer_data.get('نام')}</td>
+                    <td>{customer_data.get('نام خانوادگی')}</td>
+                    <td>{customer_data.get('شماره تماس')}</td>
+                    <td>{customer_data.get('تاریخ ایجاد اپل آیدی (شمسی)')}</td>
+                    <td>{customer_data.get('نام کاربری اپل آیدی')}</td>
+                    <td>{customer_data.get('رمز عبور اپل آیدی')}</td>
+                    <td>{customer_data.get('سوال امنیتی اول')}</td>
+                    <td>{customer_data.get('سوال امنیتی دوم')}</td>
+                    <td>{customer_data.get('سوال امنیتی سوم')}</td>
+                    <td>{customer_data.get('تاریخ تولد (میلادی)')}</td>
+                </tr>
+            </table>
+            <div class="footer">
+                <p><b>آدرس:</b> تبریز، نبش چهارراه شریعتی</p>
+                <p><b>شماره تماس:</b> 35550590</p>
+            </div>
+        </body>
+        </html>
+        """
+
+        # ایجاد شیء QTextDocument برای نمایش محتوا
+        document = QTextDocument()
+        document.setHtml(doc_content)
+
+        # تنظیم پرینتر
+        printer = QPrinter(QPrinter.HighResolution)
+        printer.setPaperSize(QPrinter.A5)
+        printer.setOrientation(QPrinter.Landscape)  # تنظیم جهت به Landscape
+        printer.setPageMargins(10, 10, 10, 10, QPrinter.Millimeter)  # تنظیم حاشیه‌ها به میلی‌متر
+        printer.setResolution(300)  # تنظیم رزولوشن به 300 DPI برای کیفیت بهتر
+
+        # نمایش دیالوگ چاپ به کاربر
+        print_dialog = QPrintDialog(printer, self)
+        print_dialog.setWindowTitle("چاپ سند مشتری")
+        if print_dialog.exec_() == QPrintDialog.Accepted:
+            document.print_(printer)
+            QMessageBox.information(self, "موفقیت", "سند با موفقیت چاپ شد.")
+
+    def open_change_credentials_dialog(self):
+        """
+        باز کردن دیالوگ تغییر نام کاربری و رمز عبور.
+        """
+        dialog = ChangePasswordDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            # پس از تغییر موفقیت‌آمیز، ممکن است نیاز به ورود مجدد کاربر باشد.
+            QMessageBox.information(self, "موفقیت", "لطفاً مجدداً وارد شوید.")
+            self.close()
+            # اجرای برنامه مجدد برای ورود با اطلاعات جدید
+            QTimer.singleShot(0, self.restart_application)
+
+    def restart_application(self):
+        """
+        بازنشانی برنامه برای ورود مجدد.
+        """
+        python = sys.executable
+        os.execl(python, python, * sys.argv)
+
+def main():
+    """
+    فانکشن اصلی اجرای برنامه.
+    """
+    app = QApplication(sys.argv)
+
+    # بارگذاری فونت Vazir قبل از ایجاد پنجره اصلی
+    font_id = QFontDatabase.addApplicationFont(os.path.join(os.path.dirname(__file__), "fonts", "Vazir-Regular.ttf"))
+    if font_id != -1:
+        font_family = QFontDatabase.applicationFontFamilies(font_id)[0]
+        app.setFont(QFont(font_family, 10))
+    else:
+        app.setFont(QFont("Tahoma", 10))  # پیش‌فرض اگر فونت Vazir بارگذاری نشد
+
+    app.setStyle("Fusion")  # استفاده از استایل Fusion برای ظاهر بهتر
+
+    # نمایش دیالوگ ورود
+    login_dialog = LoginDialog()
+    if login_dialog.exec_() == QDialog.Accepted:
+        window = CustomerManagementApp()
+        window.show()
+        sys.exit(app.exec_())
+    else:
+        sys.exit()
+
+if __name__ == "__main__":
+    main()
